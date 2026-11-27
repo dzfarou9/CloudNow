@@ -1,0 +1,75 @@
+# Codemagic workflow for the Flutter Android client in flutter/.
+# The Qt desktop app is built by .github/workflows/qt-ci.yml, not by this file.
+#
+# Required Codemagic setup:
+#   - Android keystore credential named "opennow-release"
+#   - (optional) Google Play service account if you want publishing enabled
+#
+# No signing secrets are stored in this repository.
+
+workflows:
+  android-apk:
+    name: OpenNOW Android APK
+    max_build_duration: 120
+    instance_type: mac_mini_m2
+    environment:
+      flutter: stable
+      java: 17
+      android_signing:
+        - opennow-release
+      groups:
+        - flutter
+      vars:
+        FLUTTER_PROJECT: flutter
+        RUST_MANIFEST: rust/opennow_mobile/Cargo.toml
+        JNI_OUT: android/app/src/main/jniLibs
+      cache_paths:
+        - $PUB_CACHE
+        - $HOME/.cargo/registry
+        - $HOME/.cargo/git
+        - flutter/build
+
+    scripts:
+      - name: Install Rust toolchain and Android targets
+        script: |
+          set -e
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable
+          . "$HOME/.cargo/env"
+          rustup target add aarch64-linux-android armv7-linux-android x86_64-linux-android
+          cargo install cargo-ndk --locked
+
+      - name: Resolve Flutter packages
+        working_directory: flutter
+        script: flutter pub get
+
+      - name: Build the Rust JNI bridge
+        working_directory: flutter
+        script: |
+          set -e
+          . "$HOME/.cargo/env"
+          cargo ndk \
+            -t arm64-v8a \
+            -t armeabi-v7a \
+            -t x86_64 \
+            -o "$JNI_OUT" \
+            build --release \
+            --manifest-path "$RUST_MANIFEST"
+
+      - name: Verify Dart sources
+        working_directory: flutter
+        script: dart analyze
+
+      - name: Build release APKs
+        working_directory: flutter
+        script: flutter build apk --release --split-per-abi
+
+    artifacts:
+      - flutter/build/app/outputs/flutter-apk/*.apk
+      - flutter/build/app/outputs/mapping/release/mapping.txt
+
+    publishing:
+      # Add an email recipient or Google Play publishing in Codemagic UI after
+      # the keystore is configured. Artifacts above are always retained.
+      scripts:
+        - name: Report artifact location
+          script: echo "APKs are in flutter/build/app/outputs/flutter-apk/"
